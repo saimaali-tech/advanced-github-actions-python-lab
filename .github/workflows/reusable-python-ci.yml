@@ -1,69 +1,60 @@
-
+---
 name: Reusable Python CI
 
 on:
   workflow_call:
     inputs:
       python_versions:
-        description: "Python versions to test as a JSON array"
+        description: "Python versions to test"
         required: false
         type: string
         default: '["3.10", "3.11", "3.12", "3.13"]'
 
       fail_fast:
-        description: "Cancel remaining matrix jobs after a failure"
+        description: "Stop matrix jobs after the first failure"
         required: false
         type: boolean
         default: false
 
     outputs:
       build-version:
-        description: "Generated build version"
+        description: "Generated package version"
         value: ${{ jobs.prepare.outputs.build-version }}
 
       package-filename:
-        description: "Generated Python wheel filename"
+        description: "Generated wheel filename"
         value: ${{ jobs.package.outputs.package-filename }}
 
 permissions:
   contents: read
 
 jobs:
-
-  # ---------------------------------------
-  # JOB 1: PREPARE BUILD VERSION
-  # ---------------------------------------
-
   prepare:
     name: Prepare Build Version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     outputs:
-      build-version: ${{ steps.version.outputs.value }}
+      build-version: ${{ steps.version.outputs.build-version }}
 
     steps:
-      - name: Generate version
+      - name: Generate build version
         id: version
         shell: bash
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
           else
             VERSION="0.1.0-run-${GITHUB_RUN_NUMBER}"
           fi
 
-          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
-
+          echo "build-version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Build version: $VERSION"
-
-
-  # ---------------------------------------
-  # JOB 2: MATRIX TESTING
-  # ---------------------------------------
 
   test:
     name: Test Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+
+    needs: prepare
 
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
@@ -74,22 +65,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python using composite action
-        uses: ./.github/actions/setup-python
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
-
-  # ---------------------------------------
-  # JOB 3: CODE QUALITY / RUFF LINTING
-  # ---------------------------------------
- 
-        lint:
+  lint:
     name: Code Quality - Ruff
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
@@ -99,7 +91,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
 
       - name: Install Ruff
         run: |
@@ -112,23 +103,23 @@ jobs:
       - name: Run Ruff lint checks
         run: ruff check --output-format=github .
 
-  # ---------------------------------------
-  # JOB 4: BUILD AND PACKAGE
-  # ---------------------------------------
-
   package:
     name: Build Python Package
-    needs: [test, lint, prepare]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+
+    needs:
+      - prepare
+      - test
+      - lint
 
     outputs:
-      package-filename: ${{ steps.package.outputs.filename }}
+      package-filename: ${{ steps.package-info.outputs.package-filename }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -136,35 +127,46 @@ jobs:
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip
-          pip install build
+          python -m pip install build
 
-      - name: Build Python distribution
+      - name: Update package version
+        env:
+          BUILD_VERSION: ${{ needs.prepare.outputs.build-version }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("pyproject.toml")
+          content = path.read_text()
+          content = content.replace(
+              'version = "0.1.0"',
+              f'version = "{os.environ["BUILD_VERSION"]}"',
+              1,
+          )
+          path.write_text(content)
+          PY
+
+      - name: Build package
         run: python -m build
 
       - name: Capture package filename
-        id: package
+        id: package-info
         shell: bash
         run: |
-          WHEEL=$(basename "$(find dist -maxdepth 1 -type f -name '*.whl' | head -n 1)")
+          PACKAGE_FILE=$(find dist -maxdepth 1 -name "*.whl" -printf "%f\n" | head -n 1)
 
-          if [[ -z "$WHEEL" ]]; then
-            echo "ERROR: No wheel file found!"
+          if [[ -z "$PACKAGE_FILE" ]]; then
+            echo "No wheel package found!"
             exit 1
           fi
 
-          echo "filename=$WHEEL" >> "$GITHUB_OUTPUT"
+          echo "package-filename=$PACKAGE_FILE" >> "$GITHUB_OUTPUT"
+          echo "Package: $PACKAGE_FILE"
 
-          echo "Generated package: $WHEEL"
-
-      - name: Upload versioned artifact
+      - name: Upload versioned package artifact
         uses: actions/upload-artifact@v4
         with:
           name: python-package-${{ needs.prepare.outputs.build-version }}
           path: dist/
-          if-no-files-found: error
           retention-days: 14
-
-      - name: Display build information
-        run: |
-          echo "Build version: ${{ needs.prepare.outputs.build-version }}"
-          echo "Package: ${{ steps.package.outputs.filename }}"
