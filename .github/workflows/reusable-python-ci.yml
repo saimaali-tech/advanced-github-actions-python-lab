@@ -1,28 +1,49 @@
+
 name: Reusable Python CI
 
 on:
   workflow_call:
     inputs:
-      python-versions:
-        description: JSON array of Python versions
+      python_versions:
+        description: "Python versions to test as a JSON array"
         required: false
         type: string
-        default: '["3.10", "3.11", "3.12"]'
+        default: '["3.10", "3.11", "3.12", "3.13"]'
+
+      fail_fast:
+        description: "Cancel remaining matrix jobs after a failure"
+        required: false
+        type: boolean
+        default: false
+
     outputs:
       build-version:
-        description: Version label used for this run's artifacts
+        description: "Generated build version"
         value: ${{ jobs.prepare.outputs.build-version }}
+
+      package-filename:
+        description: "Generated Python wheel filename"
+        value: ${{ jobs.package.outputs.package-filename }}
 
 permissions:
   contents: read
 
 jobs:
+
+  # ---------------------------------------
+  # JOB 1: PREPARE BUILD VERSION
+  # ---------------------------------------
+
   prepare:
+    name: Prepare Build Version
     runs-on: ubuntu-latest
+
     outputs:
       build-version: ${{ steps.version.outputs.value }}
+
     steps:
-      - id: version
+      - name: Generate version
+        id: version
         shell: bash
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -30,20 +51,30 @@ jobs:
           else
             VERSION="0.1.0-run-${GITHUB_RUN_NUMBER}"
           fi
+
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
 
-  test-and-package:
-    needs: prepare
+          echo "Build version: $VERSION"
+
+
+  # ---------------------------------------
+  # JOB 2: MATRIX TESTING
+  # ---------------------------------------
+
+  test:
+    name: Test Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+
     strategy:
-      fail-fast: false
+      fail-fast: ${{ inputs.fail_fast }}
       matrix:
-        python-version: ${{ fromJSON(inputs.python-versions) }}
+        python-version: ${{ fromJSON(inputs.python_versions) }}
+
     steps:
-      - name: Check out source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Use composite setup action
+      - name: Setup Python using composite action
         uses: ./.github/actions/setup-python
         with:
           python-version: ${{ matrix.python-version }}
@@ -51,21 +82,84 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
-      - name: Build distribution
+
+  # ---------------------------------------
+  # JOB 3: CODE QUALITY / RUFF LINTING
+  # ---------------------------------------
+
+  lint:
+    name: Code Quality - Ruff
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Run Ruff checks
+        run: ruff check .
+
+
+  # ---------------------------------------
+  # JOB 4: BUILD AND PACKAGE
+  # ---------------------------------------
+
+  package:
+    name: Build Python Package
+    needs: [test, lint, prepare]
+    runs-on: ubuntu-latest
+
+    outputs:
+      package-filename: ${{ steps.package.outputs.filename }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build Python distribution
         run: python -m build
 
-      - name: Rename build output with version and Python version
+      - name: Capture package filename
+        id: package
         shell: bash
         run: |
-          mkdir -p packaged
-          cp dist/* packaged/
-          echo "Build version: ${{ needs.prepare.outputs.build-version }}" > packaged/BUILD_INFO.txt
-          echo "Python version: ${{ matrix.python-version }}" >> packaged/BUILD_INFO.txt
+          WHEEL=$(basename "$(find dist -maxdepth 1 -type f -name '*.whl' | head -n 1)")
+
+          if [[ -z "$WHEEL" ]]; then
+            echo "ERROR: No wheel file found!"
+            exit 1
+          fi
+
+          echo "filename=$WHEEL" >> "$GITHUB_OUTPUT"
+
+          echo "Generated package: $WHEEL"
 
       - name: Upload versioned artifact
         uses: actions/upload-artifact@v4
         with:
-          name: python-package-${{ needs.prepare.outputs.build-version }}-py${{ matrix.python-version }}
-          path: packaged/
+          name: python-package-${{ needs.prepare.outputs.build-version }}
+          path: dist/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Display build information
+        run: |
+          echo "Build version: ${{ needs.prepare.outputs.build-version }}"
+          echo "Package: ${{ steps.package.outputs.filename }}"
