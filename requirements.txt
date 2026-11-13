@@ -1,0 +1,1 @@
+# No runtime dependencies; setup-python uses this file as its pip cache key.

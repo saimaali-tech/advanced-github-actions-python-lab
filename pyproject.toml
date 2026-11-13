@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "github-actions-python-lab"
+version = "0.1.0"
+description = "A small project for practicing advanced GitHub Actions"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+packages = ["app"]

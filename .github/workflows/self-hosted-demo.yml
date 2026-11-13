@@ -1,0 +1,21 @@
+name: Optional self-hosted runner demo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runner-info:
+    # Add a self-hosted runner in GitHub repository Settings > Actions > Runners.
+    # Uncomment the next line after registering a runner with these labels.
+    # runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show runner type
+        run: |
+          echo "This workflow currently uses GitHub-hosted ubuntu-latest."
+          echo "To practice self-hosted runners, register your own runner,"
+          echo "then replace runs-on above with [self-hosted, linux, x64]."
+          echo "Never run untrusted pull-request code on a self-hosted runner."

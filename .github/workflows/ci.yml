@@ -1,0 +1,41 @@
+name: Python CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: ./.github/workflows/reusable-python-ci.yml
+    with:
+      python-versions: '["3.10", "3.11", "3.12"]'
+
+  stage:
+    name: Demonstrate environment protection
+    needs: ci
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Show release metadata
+        env:
+          BUILD_VERSION: ${{ needs.ci.outputs.build-version }}
+          OPTIONAL_DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          echo "Ready to stage build: $BUILD_VERSION"
+          if [[ -n "$OPTIONAL_DEPLOY_TOKEN" ]]; then
+            echo "Environment secret is available."
+          else
+            echo "No DEPLOY_TOKEN configured; this lab does not deploy externally."
+          fi
