@@ -1,5 +1,7 @@
 import unittest
+
 from app.calculator import add, divide
+
 
 class CalculatorTests(unittest.TestCase):
     def test_add(self):
